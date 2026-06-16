@@ -43,7 +43,7 @@ temperature: 0.5
 
 let text = response.choices[0].message.content;
 
-/// 🔥 odstranění ```json
+
 text = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
 let json;
