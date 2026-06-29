@@ -31,6 +31,7 @@ app.use("/api/ucitel", ucitelRoutes);
 app.use("/api/test-admin", testAdminRoutes);
 
 const PORT = process.env.PORT || 3000;
+console.log("OPENAI_API_KEY exists:", !!process.env.OPENAI_API_KEY);
 
 app.listen(PORT, () => {
   console.log("Server běží na portu " + PORT);
