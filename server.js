@@ -16,7 +16,9 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173"
+}));
 app.use(express.json());
 app.use("/api/test", testRoutes);
 app.use("/api/auth", authRoutes);
@@ -28,8 +30,8 @@ app.use("/api/statistiky", statistikyRoutes);
 app.use("/api/ucitel", ucitelRoutes);
 app.use("/api/test-admin", testAdminRoutes);
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-console.log("Server běží na portu " + PORT);
+  console.log("Server běží na portu " + PORT);
 });
