@@ -10,8 +10,7 @@ const openaiKeys = Object.keys(process.env).filter((key) =>
 console.log("OPENAI-related env keys:", openaiKeys);
 console.log("OPENAI_API_KEY exists:", Boolean(process.env.OPENAI_API_KEY));
 console.log("OPENAI_API_KEY length:", process.env.OPENAI_API_KEY?.length || 0);
-console.log("TEST_VAR:", process.env.TEST_VAR);
-console.log("OPENAI_API_KEY:", Boolean(process.env.OPENAI_API_KEY));
+
 const apiKey = process.env.OPENAI_API_KEY?.trim();
 
 if (!apiKey) {
