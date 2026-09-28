@@ -1,5 +1,5 @@
 export function jenUcitel(req, res, next) {
-if (req.user.role !== "učitel" && req.user.role !== "admin") {
+if (req.user.role !== "teacher" && req.user.role !== "admin") {
 return res.status(403).json({ error: "Jen učitel" });
 }
 next();
