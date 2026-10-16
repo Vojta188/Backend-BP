@@ -1,53 +1,69 @@
 import { generujLekci } from "../services/ai.service.js";
 import { db } from "../config/databaze.js";
+import { promichejOdpovedi } from "../utils/promichejOdpovedi.js";
 
 
 
 export async function vytvorLekci(req, res) {
-const { tema, pocetOtazek } = req.body;
-const teacherId = req.user.id;
+  const { tema, pocetOtazek } = req.body ?? {};
+  const title = typeof tema === "string" ? tema.trim() : "";
+  const count = Number(pocetOtazek);
+  if (title.length < 3 || title.length > 200 || !Number.isInteger(count) || count < 1 || count > 30) {
+    return res.status(400).json({ error: "Zadej téma (3–200 znaků) a 1–30 otázek." });
+  }
 
-const data = await generujLekci(tema, pocetOtazek);
+  try {
+    const data = await generujLekci(title, count);
+    const questions = data?.otazky;
+    if (!Array.isArray(questions) || questions.length !== count ||
+        typeof data.text_lehky !== "string" || data.text_lehky.length > 65000 ||
+        typeof data.text_tezky !== "string" || data.text_tezky.length > 65000 ||
+        questions.some((q) => !q || !["A", "B", "C", "D"].includes(q.correct) ||
+          !["easy", "hard"].includes(q.difficulty) ||
+          [q.question, q.a, q.b, q.c, q.d].some((value) => typeof value !== "string" ||
+            !value.trim() || value.length > 65000) ||
+          (q.explanation != null && (typeof q.explanation !== "string" || q.explanation.length > 65000)))) {
+      return res.status(502).json({ error: "AI nevrátila úplnou lekci. Zkus to znovu." });
+    }
 
-if (!data) return res.status(500).json({ error: "AI chyba" });
-
-const [result] = await db.query(
-"INSERT INTO lessons (title,content_easy,content_hard,created_by) VALUES (?,?,?,?)",
-[tema, data.text_lehky, data.text_tezky, teacherId]
-);
-
-const lessonId = result.insertId;
-
-for (const q of data.otazky) {
-await db.query(
-  `INSERT INTO questions 
-  (lesson_id, question, a, b, c, d, correct, explanation, difficulty) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  [
-    lessonId,
-    q.question,
-    q.a,
-    q.b,
-    q.c,
-    q.d,
-    q.correct,
-    q.explanation,
-    q.difficulty
-  ]
-);
-
-}
-
-res.json({ lessonId });
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [result] = await conn.query(
+        "INSERT INTO lessons (title,content_easy,content_hard,created_by) VALUES (?,?,?,?)",
+        [title, data.text_lehky, data.text_tezky, req.user.id]
+      );
+      for (const question of questions) {
+        const q = promichejOdpovedi(question);
+        await conn.query(
+          `INSERT INTO questions
+           (lesson_id, question, a, b, c, d, correct, explanation, difficulty)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [result.insertId, q.question, q.a, q.b, q.c, q.d, q.correct, q.explanation || "", q.difficulty]
+        );
+      }
+      await conn.commit();
+      return res.json({ lessonId: result.insertId });
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  } catch (error) {
+    console.error("Vytvoření lekce selhalo:", error);
+    return res.status(500).json({ error: "Lekci se nepodařilo uložit." });
+  }
 }
 
 
 export async function schvalLekci(req, res) {
-const lessonId = req.params.id;
-
-await db.query("UPDATE lessons SET approved = true WHERE id = ?", [lessonId]);
-
-res.json({ message: "Lekce schválena" });
+  const [result] = await db.query(
+    "UPDATE lessons SET approved = true WHERE id = ? AND created_by = ?",
+    [req.params.id, req.user.id]
+  );
+  if (!result.affectedRows) return res.status(403).json({ error: "K této lekci nemáš přístup." });
+  return res.json({ message: "Lekce schválena" });
 }
 
 export async function ziskejLekce(req, res) {
@@ -55,21 +71,25 @@ const role = req.user.role;
 
 let rows;
 
-if (role === "teacher") {
-[rows] = await db.query("SELECT * FROM lessons");
+if (role === "teacher" || role === "admin") {
+[rows] = await db.query("SELECT * FROM lessons WHERE created_by = ? ORDER BY id DESC", [req.user.id]);
 } else {
 const studentId = req.user.id;
 
  [rows] = await db.query(
   `SELECT l.*,
-          COALESCE(la.status,'none') AS attempt_status
+          CASE WHEN EXISTS (
+            SELECT 1 FROM lesson_attempts la
+            WHERE la.lesson_id = l.id AND la.student_id = ? AND la.status = 'completed'
+          ) THEN 'completed' WHEN EXISTS (
+            SELECT 1 FROM lesson_attempts la
+            WHERE la.lesson_id = l.id AND la.student_id = ? AND la.status = 'active'
+          ) THEN 'active' ELSE 'none' END AS attempt_status
    FROM lessons l
    JOIN lesson_targets lt ON lt.lesson_id = l.id AND lt.student_id = ?
-   LEFT JOIN lesson_attempts la 
-      ON la.lesson_id = l.id AND la.student_id = ? AND la.status = 'active'
    WHERE l.approved = true
    ORDER BY l.id DESC`,
-  [studentId, studentId]
+  [studentId, studentId, studentId]
 );
 }
 
@@ -79,19 +99,35 @@ res.json(rows);
 
 
 
-// GET detail už máš (lesson + questions) – pokud ne, přidej
 export async function detailLekce(req, res) {
   const { id } = req.params;
-
   const [lessons] = await db.query("SELECT * FROM lessons WHERE id = ?", [id]);
   if (!lessons.length) return res.status(404).json({ error: "Lekce nenalezena" });
 
+  const lesson = lessons[0];
+  const teacher = req.user.role === "teacher" || req.user.role === "admin";
+  if (teacher && lesson.created_by !== req.user.id) {
+    return res.status(403).json({ error: "K této lekci nemáš přístup." });
+  }
+  if (!teacher) {
+    if (req.user.role !== "student" || !lesson.approved) {
+      return res.status(403).json({ error: "K této lekci nemáš přístup." });
+    }
+    const [allowed] = await db.query(
+      "SELECT 1 FROM lesson_targets WHERE lesson_id = ? AND student_id = ? LIMIT 1",
+      [id, req.user.id]
+    );
+    if (!allowed.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
+  }
+
   const [questions] = await db.query(
-    "SELECT * FROM questions WHERE lesson_id = ? ORDER BY id",
+    teacher
+      ? "SELECT * FROM questions WHERE lesson_id = ? ORDER BY id"
+      : "SELECT id, lesson_id, question, a, b, c, d, difficulty FROM questions WHERE lesson_id = ? ORDER BY id",
     [id]
   );
 
-  res.json({ lesson: lessons[0], questions });
+  res.json({ lesson, questions });
 }
 
 // PUT úprava lekce (title + texty), jen učitel a jen vlastní a jen neschválené
@@ -99,6 +135,11 @@ export async function upravLekci(req, res) {
   const teacherId = req.user.id;
   const { id } = req.params;
   const { title, content_easy, content_hard } = req.body;
+  if (typeof title !== "string" || title.trim().length < 3 || title.length > 255 ||
+      typeof content_easy !== "string" || typeof content_hard !== "string" ||
+      content_easy.length > 65000 || content_hard.length > 65000) {
+    return res.status(400).json({ error: "Neplatný název nebo obsah lekce." });
+  }
 
   const [rows] = await db.query(
     "SELECT * FROM lessons WHERE id = ? AND created_by = ?",
@@ -109,32 +150,10 @@ export async function upravLekci(req, res) {
 
   await db.query(
     "UPDATE lessons SET title = ?, content_easy = ?, content_hard = ? WHERE id = ?",
-    [title, content_easy, content_hard, id]
+    [title.trim(), content_easy, content_hard, id]
   );
 
   res.json({ message: "Lekce upravena" });
-}
-
-
-export async function nastavCiloveZakys(req, res) {
-  const teacherId = req.user.id;
-  const { id } = req.params; // lessonId
-  const { studentIds } = req.body;
-
-  // ověř, že lekce patří učiteli
-  const [lrows] = await db.query("SELECT id FROM lessons WHERE id = ? AND created_by = ?", [id, teacherId]);
-  if (!lrows.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
-
-  // smažeme staré cíle a uložíme nové
-  await db.query("DELETE FROM lesson_targets WHERE lesson_id = ?", [id]);
-
-  if (Array.isArray(studentIds) && studentIds.length) {
-    for (const sid of studentIds) {
-      await db.query("INSERT INTO lesson_targets (lesson_id, student_id) VALUES (?,?)", [id, sid]);
-    }
-  }
-
-  res.json({ message: "Přiřazení uloženo" });
 }
 
 
@@ -149,7 +168,9 @@ export async function smazLekci(req, res) {
   );
   if (!rows.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
 
-  // smažeme (schválení nehraje roli)
+  const [activity] = await db.query("SELECT 1 FROM answers WHERE lesson_id = ? LIMIT 1", [id]);
+  if (activity.length) return res.status(409).json({ error: "Lekci s uloženými výsledky nelze smazat." });
+
   await db.query("DELETE FROM lessons WHERE id = ?", [id]);
 
   res.json({ message: "Lekce smazána" });
@@ -159,7 +180,7 @@ export async function smazLekci(req, res) {
 export async function ziskejPrirazeni(req, res) {
   try {
     const teacherId = req.user.id;
-    const { id } = req.params; // lessonId
+    const { id } = req.params; 
 
     const [lrows] = await db.query(
       "SELECT id FROM lessons WHERE id = ? AND created_by = ?",
@@ -179,46 +200,60 @@ export async function ziskejPrirazeni(req, res) {
   }
 }
 
+function pripravStudentIds(ids, allowEmpty = true) {
+  if (!Array.isArray(ids) || ids.length > 200 || (!allowEmpty && ids.length === 0) ||
+      ids.some((id) => !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return null;
+  return [...new Set(ids.map(Number))];
+}
+
+async function overStudenty(conn, ids) {
+  if (ids.length === 0) return true;
+  const placeholders = ids.map(() => "?").join(",");
+  const [rows] = await conn.query(
+    `SELECT id FROM users WHERE role = 'student' AND id IN (${placeholders})`, ids
+  );
+  return rows.length === ids.length;
+}
+
 export async function nastavCiloveZaky(req, res) {
+  const { id } = req.params;
+  const studentIds = pripravStudentIds(req.body?.studentIds);
+  if (!studentIds) return res.status(400).json({ error: "Neplatný seznam žáků." });
+  const conn = await db.getConnection();
   try {
-    const teacherId = req.user.id;
-    const { id } = req.params; // lessonId
-    const { studentIds } = req.body;
-
-    const [lrows] = await db.query(
-      "SELECT id FROM lessons WHERE id = ? AND created_by = ?",
-      [id, teacherId]
+    await conn.beginTransaction();
+    const [lrows] = await conn.query(
+      "SELECT id FROM lessons WHERE id = ? AND created_by = ? FOR UPDATE",
+      [id, req.user.id]
     );
-    if (!lrows.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
-
-    await db.query("DELETE FROM lesson_targets WHERE lesson_id = ?", [id]);
-
-    if (Array.isArray(studentIds) && studentIds.length) {
-      for (const sid of studentIds) {
-        await db.query(
-          "INSERT INTO lesson_targets (lesson_id, student_id) VALUES (?,?)",
-          [id, sid]
-        );
-      }
+    if (!lrows.length || !(await overStudenty(conn, studentIds))) {
+      await conn.rollback();
+      return res.status(!lrows.length ? 403 : 400).json({ error: !lrows.length
+        ? "K této lekci nemáš přístup." : "Seznam obsahuje neplatného žáka." });
     }
-
-    res.json({ message: "Přiřazení uloženo" });
+    await conn.query("DELETE FROM lesson_targets WHERE lesson_id = ?", [id]);
+    for (const sid of studentIds) {
+      await conn.query("INSERT INTO lesson_targets (lesson_id, student_id) VALUES (?,?)", [id, sid]);
+    }
+    await conn.commit();
+    return res.json({ message: "Přiřazení uloženo" });
   } catch (e) {
-    console.log("CHYBA nastavCiloveZaky:", e);
-    res.status(500).json({ error: "Server error" });
+    await conn.rollback();
+    console.error("CHYBA nastavCiloveZaky:", e);
+    return res.status(500).json({ error: "Přiřazení se nepodařilo uložit." });
+  } finally {
+    conn.release();
   }
 }
 
 export async function prehledZakuLekce(req, res) {
   try {
     const teacherId = req.user.id;
-    const { id } = req.params; // lessonId
+    const { id } = req.params; 
 
-    // ověř vlastnictví lekce
     const [l] = await db.query("SELECT id FROM lessons WHERE id = ? AND created_by = ?", [id, teacherId]);
     if (!l.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
 
-    // seznam přiřazených žáků + jejich poslední stav attemptu
     const [rows] = await db.query(
       `
       SELECT 
@@ -248,7 +283,7 @@ export async function prehledZakuLekce(req, res) {
 
       let status = "nezacato";
       if (active) status = "rozpracovano";
-      if (completed) status = "splneno"; // splněno má přednost
+      if (completed) status = "splneno"; 
 
       return {
         student_id: r.student_id,
@@ -267,27 +302,23 @@ export async function prehledZakuLekce(req, res) {
 }
 
 export async function pridejZakyDoLekce(req, res) {
+  const studentIds = pripravStudentIds(req.body?.studentIds, false);
+  if (!studentIds) return res.status(400).json({ error: "Neplatný seznam žáků." });
   try {
     const teacherId = req.user.id;
-    const { id } = req.params; // lessonId
-    const { studentIds } = req.body;
-
-    if (!Array.isArray(studentIds) || studentIds.length === 0) {
-      return res.status(400).json({ error: "Chybí studentIds" });
-    }
+    const { id } = req.params; 
 
     const [l] = await db.query("SELECT id FROM lessons WHERE id = ? AND created_by = ?", [id, teacherId]);
     if (!l.length) return res.status(403).json({ error: "K této lekci nemáš přístup." });
+    if (!(await overStudenty(db, studentIds))) {
+      return res.status(400).json({ error: "Seznam obsahuje neplatného žáka." });
+    }
 
     for (const sid of studentIds) {
-      try {
-        await db.query(
-          "INSERT INTO lesson_targets (lesson_id, student_id) VALUES (?,?)",
-          [id, sid]
-        );
-      } catch {
-        // už existuje -> ignorujeme
-      }
+      await db.query(
+        "INSERT INTO lesson_targets (lesson_id, student_id) VALUES (?,?) ON DUPLICATE KEY UPDATE id = id",
+        [id, sid]
+      );
     }
 
     res.json({ message: "Žáci přidáni k lekci" });

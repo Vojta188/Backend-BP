@@ -1,6 +1,6 @@
 import { openai } from "../config/ai.js";
 
-export async function generujVysvetleni(otazka, spravna, odpoved, vysvetleniDB) {
+export async function generujVysvetleni(otazka, spravna, odpoved) {
 
 const prompt = `
 Student odpověděl špatně.
@@ -13,6 +13,7 @@ Vysvětli česky:
 - proč je odpověď špatně
 - jaká je správná
 - stručně
+- Odpovědi vysvětluj podle jejich textu, ne podle písmen A/B/C/D.
 `;
 
 const response = await openai.chat.completions.create({

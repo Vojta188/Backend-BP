@@ -10,19 +10,17 @@ import {
   nastavCiloveZaky,
 } from "../controllers/lekce.controller.js";
 import { prehledZakuLekce, pridejZakyDoLekce } from "../controllers/lekce.controller.js";
+import { limitGenerovani } from "../middlewares/rateLimit.js";
 
 const router = express.Router();
 
-router.post("/vytvor", overeniTokenu, jenUcitel, vytvorLekci);
+router.post("/vytvor", overeniTokenu, jenUcitel, limitGenerovani, vytvorLekci);
 router.post("/schval/:id", overeniTokenu, jenUcitel, schvalLekci);
 router.get("/", overeniTokenu, ziskejLekce);
 router.get("/:id/detail", overeniTokenu, detailLekce);
 router.delete("/:id", overeniTokenu, jenUcitel, smazLekci);
 
-// detail pro kontrolu (učitel i student, ale student uvidí jen schválené – to můžeš řešit později)
-router.get("/:id/detail", overeniTokenu, detailLekce);
-
-// editace lekce – jen učitel
+// editace lekce 
 router.put("/:id", overeniTokenu, jenUcitel, upravLekci);
 
 router.get("/:id/prirazeni", overeniTokenu, jenUcitel, ziskejPrirazeni);

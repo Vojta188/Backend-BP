@@ -15,9 +15,23 @@ import testAdminRoutes from "./routes/test_admin.routes.js";
 dotenv.config();
 
 const app = express();
+const proxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (Number.isInteger(proxyHops) && proxyHops > 0 && proxyHops <= 5) {
+  app.set("trust proxy", proxyHops);
+}
 
-app.use(cors());
-app.use(express.json());
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Referrer-Policy", "no-referrer");
+  res.set("X-Frame-Options", "DENY");
+  next();
+});
+const allowedOrigins = (process.env.CORS_ORIGINS ||
+  "http://localhost:3000,http://localhost:3001,https://frontend-bp.vercel.app")
+  .split(",").map((origin) => origin.trim()).filter(Boolean);
+app.use(cors({ origin: allowedOrigins }));
+app.use(express.json({ limit: "128kb" }));
 app.use("/api/test", testRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/lekce", lekceRoutes);
@@ -29,8 +43,6 @@ app.use("/api/ucitel", ucitelRoutes);
 app.use("/api/test-admin", testAdminRoutes);
 
 const PORT = process.env.PORT || 3000;
-console.log("OPENAI_API_KEY exists:", !!process.env.OPENAI_API_KEY);
-
 app.listen(PORT, () => {
   console.log("Server běží na portu " + PORT);
 });

@@ -11,15 +11,12 @@ import {
 const router = express.Router();
 
 // učitel přehled
-// GET /api/statistiky/ucitel/prehled
 router.get("/ucitel/prehled", overeniTokenu, jenUcitel, ucitelPrehled);
 
 // detail lekce
-// GET /api/statistiky/ucitel/lekce/:lessonId
 router.get("/ucitel/lekce/:lessonId", overeniTokenu, jenUcitel, ucitelLekceDetail);
 
-// detail studenta (jen v rámci učitelových lekcí)
-// GET /api/statistiky/ucitel/student/:studentId
+// detail studenta 
 router.get("/ucitel/student/:studentId", overeniTokenu, jenUcitel, ucitelStudentDetail);
 
 export default router;

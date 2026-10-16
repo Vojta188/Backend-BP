@@ -4,7 +4,6 @@ export async function seznamStudentuUcitel(req, res) {
   try {
     const q = (req.query.query || "").trim();
 
-    // PŘEDPOKLAD: users má sloupce id, name, email, role
     let sql = "SELECT id, name, email FROM users WHERE role = 'student'";
     const params = [];
 
@@ -19,6 +18,6 @@ export async function seznamStudentuUcitel(req, res) {
     res.json(rows);
   } catch (e) {
     console.log("CHYBA seznamStudentuUcitel:", e);
-    res.status(500).json({ error: "Server error", detail: String(e.message || e) });
+    res.status(500).json({ error: "Seznam žáků se nepodařilo načíst." });
   }
 }

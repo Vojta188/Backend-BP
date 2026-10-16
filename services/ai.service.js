@@ -33,6 +33,8 @@ Formát:
 - Správná odpověď musí být náhodně mezi A/B/C/D.
 - V rámci všech otázek se snaž o přibližně rovnoměrné rozložení (A,B,C,D).
 - Nepreferuj písmeno A.
+- Možnosti se po vygenerování promíchají. Každá musí dávat smysl samostatně, bez odkazu na písmena nebo pořadí ostatních možností.
+- Ve vysvětlení uváděj obsah odpovědí, ne označení A/B/C/D.
 `;
 
 const response = await openai.chat.completions.create({
@@ -51,8 +53,7 @@ let json;
 try {
 json = JSON.parse(text);
 } catch (err) {
-console.log("NEPLATNY JSON OD AI:");
-console.log(text);
+console.warn("AI nevrátila platný JSON.");
 return null;
 }
 

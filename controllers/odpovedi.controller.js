@@ -2,65 +2,80 @@ import { db } from "../config/databaze.js";
 import { generujVysvetleni } from "../services/vysvetleni.service.js";
 
 export async function odesliOdpoved(req, res) {
+  let conn;
   try {
     const studentId = req.user.id;
-    const { questionId, answer } = req.body;
-
-    if (!questionId || !answer) {
-      return res.status(400).json({ error: "Chybí questionId nebo answer" });
+    const { questionId, answer } = req.body ?? {};
+    const studentAns = typeof answer === "string" ? answer.trim().toUpperCase() : "";
+    if (!Number.isSafeInteger(Number(questionId)) || Number(questionId) <= 0 ||
+        !["A", "B", "C", "D"].includes(studentAns)) {
+      return res.status(400).json({ error: "Neplatná otázka nebo odpověď." });
     }
 
-    // 1) najdeme otázku
-    const [rows] = await db.query("SELECT * FROM questions WHERE id = ?", [questionId]);
-    if (!rows.length) return res.status(404).json({ error: "Otázka neexistuje" });
-
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      "SELECT id, lesson_id, question, a, b, c, d, correct FROM questions WHERE id = ?", [questionId]
+    );
+    if (!rows.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Otázka neexistuje." });
+    }
     const q = rows[0];
 
-    // 2) najdeme aktivní attempt pro tuhle lekci
-    const [att] = await db.query(
-      "SELECT id FROM lesson_attempts WHERE lesson_id = ? AND student_id = ? AND status='active' LIMIT 1",
+    const [att] = await conn.query(
+      `SELECT la.id FROM lesson_attempts la
+       JOIN lesson_targets lt ON lt.lesson_id = la.lesson_id AND lt.student_id = la.student_id
+       JOIN lessons l ON l.id = la.lesson_id
+       WHERE la.lesson_id = ? AND la.student_id = ? AND la.status = 'active'
+         AND l.approved = true LIMIT 1 FOR UPDATE`,
       [q.lesson_id, studentId]
     );
-
     if (!att.length) {
-      return res.status(400).json({ error: "Nejdřív spusť test (attempt)." });
+      await conn.rollback();
+      return res.status(403).json({ error: "Pro tuto otázku nemáš aktivní test." });
     }
 
     const attemptId = att[0].id;
-
-    // 3) normalizace odpovědí
-    const studentAns = String(answer).trim().toUpperCase();
-    const correctAns = String(q.correct || "").trim().toUpperCase();
-    const jeSpravne = correctAns === studentAns;
-
-    // 4) volitelné: zabráníme dvojité odpovědi na stejnou otázku v rámci attemptu
-    const [dup] = await db.query(
-      "SELECT id FROM answers WHERE attempt_id = ? AND question_id = ? LIMIT 1",
-      [attemptId, questionId]
-    );
-    if (dup.length) {
-      return res.status(400).json({ error: "Na tuto otázku už jsi v tomto pokusu odpověděl." });
+    const jeSpravne = String(q.correct || "").trim().toUpperCase() === studentAns;
+    // Odpověď se uloží i při nedostupnosti AI; unikátní index zabraňuje souběžné duplicitě.
+    let inserted;
+    try {
+      [inserted] = await conn.query(
+        `INSERT INTO answers (student_id, question_id, lesson_id, attempt_id, answer, is_correct)
+         VALUES (?,?,?,?,?,?)`,
+        [studentId, q.id, q.lesson_id, attemptId, studentAns, jeSpravne]
+      );
+    } catch (error) {
+      if (error.code === "ER_DUP_ENTRY") {
+        await conn.rollback();
+        return res.status(409).json({ error: "Na tuto otázku už jsi odpověděl." });
+      }
+      throw error;
     }
+    await conn.commit();
+    conn.release();
+    conn = null;
 
-    // 5) AI vysvětlení
     let vysvetleni = null;
     if (!jeSpravne) {
-      vysvetleni = await generujVysvetleni(q.question, correctAns, studentAns);
+      try {
+        vysvetleni = await generujVysvetleni(
+          q.question, q[q.correct.toLowerCase()], q[studentAns.toLowerCase()]
+        );
+        if (vysvetleni) {
+          await db.query("UPDATE answers SET explanation = ? WHERE id = ?", [vysvetleni, inserted.insertId]);
+        }
+      } catch (error) {
+        console.error("Vysvětlení odpovědi není dostupné:", error);
+      }
     }
-
-    // 6) uložíme odpověď (už s attempt_id)
-    const [ins] = await db.query(
-      "INSERT INTO answers (student_id,question_id,lesson_id,attempt_id,answer,is_correct) VALUES (?,?,?,?,?,?)",
-      [studentId, questionId, q.lesson_id, attemptId, studentAns, jeSpravne]
-    );
-
-    res.json({
-      answerId: ins.insertId,
-      correct: jeSpravne,
-      vysvetleni,
-    });
-  } catch (err) {
-    console.log("CHYBA odesliOdpoved:", err);
-    res.status(500).json({ error: "Server error" });
+    return res.json({ answerId: inserted.insertId, correct: jeSpravne, vysvetleni });
+  } catch (error) {
+    if (conn) await conn.rollback();
+    console.error("Uložení odpovědi selhalo:", error);
+    return res.status(500).json({ error: "Odpověď se nepodařilo uložit." });
+  } finally {
+    if (conn) conn.release();
   }
 }
