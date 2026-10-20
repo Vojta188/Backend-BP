@@ -15,6 +15,15 @@ export async function vytvorLekci(req, res) {
   try {
     const data = await generujLekci(title, count);
     const questions = data?.otazky;
+
+    
+//test proc nejde více jak 20
+    console.log("Kontrola lekce:", {
+  pozadovano: count,
+  vraceno: Array.isArray(questions) ? questions.length : null,
+});
+
+
     if (!Array.isArray(questions) || questions.length !== count ||
         typeof data.text_lehky !== "string" || data.text_lehky.length > 65000 ||
         typeof data.text_tezky !== "string" || data.text_tezky.length > 65000 ||

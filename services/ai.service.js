@@ -43,6 +43,13 @@ messages: [{ role: "user", content: prompt }],
 temperature: 0.5
 });
 
+
+console.log("Dokončení AI:", {
+  duvod: response.choices?.[0]?.finish_reason,
+  vystupniTokeny: response.usage?.completion_tokens,
+});
+
+
 let text = response.choices[0].message.content;
 
 
@@ -56,6 +63,8 @@ json = JSON.parse(text);
 console.warn("AI nevrátila platný JSON.");
 return null;
 }
+
+
 
 return {
 text_lehky: json.text_lehky,
