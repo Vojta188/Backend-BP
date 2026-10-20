@@ -51,9 +51,6 @@ export async function ziskejOtazky(req, res) {
   res.json(questions);
 }
 
-
-
-// PUT /api/otazky/:id (jen učitel, jen vlastní lekce, jen neschválená)
 export async function upravOtazku(req, res) {
   const teacherId = req.user.id;
   const { id } = req.params;
@@ -89,7 +86,6 @@ export async function upravOtazku(req, res) {
   res.json({ message: "Otázka upravena" });
 }
 
-// DELETE /api/otazky/:id (jen učitel, jen vlastní lekce, jen neschválená)
 export async function smazOtazku(req, res) {
   const teacherId = req.user.id;
   const { id } = req.params;

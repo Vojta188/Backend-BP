@@ -34,7 +34,21 @@ export async function vytvorLekci(req, res) {
         [title, data.text_lehky, data.text_tezky, req.user.id]
       );
       for (const question of questions) {
+        // Zapamatujeme si původně správný text.
+        const spravnyText = question[question.correct.toLowerCase()];
+
         const q = promichejOdpovedi(question);
+
+        // Správné písmeno určíme podle nové pozice tohoto textu.
+        const shody = ["A", "B", "C", "D"].filter(
+          (pismeno) => q[pismeno.toLowerCase()] === spravnyText
+        );
+
+if (shody.length !== 1) {
+  throw new Error("Správnou odpověď nelze jednoznačně přiřadit.");
+}
+
+q.correct = shody[0];
         await conn.query(
           `INSERT INTO questions
            (lesson_id, question, a, b, c, d, correct, explanation, difficulty)

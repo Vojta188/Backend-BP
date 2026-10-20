@@ -1,13 +1,10 @@
 import { db } from "../config/databaze.js";
 
-/**
- * GET /api/statistiky/ucitel/prehled
- * Přehled pro učitele: souhrn za všechny jeho lekce
- */
+
 export async function ucitelPrehled(req, res) {
   const teacherId = req.user.id;
 
-  // Souhrn: odpovědi na učitelovy lekce
+  // odpovědi na učitelovy lekce
   const [sum] = await db.query(
     `SELECT 
         COUNT(a.id) AS totalAnswers,
@@ -24,7 +21,7 @@ export async function ucitelPrehled(req, res) {
   const correctAnswers = Number(sum[0]?.correctAnswers || 0);
   const successRate = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0;
 
-  // Nejlepší / nejhorší lekce podle úspěšnosti (min 5 odpovědí)
+  // Nejlepší / nejhorší lekce podle úspěšnosti
   const [lessonRates] = await db.query(
     `SELECT
         l.id AS lessonId,
@@ -76,7 +73,6 @@ export async function ucitelLekceDetail(req, res) {
   const teacherId = req.user.id;
   const { lessonId } = req.params;
 
-  // Ověření vlastnictví lekce
   const [lrows] = await db.query(
     "SELECT id, title FROM lessons WHERE id = ? AND created_by = ?",
     [lessonId, teacherId]
@@ -98,7 +94,7 @@ export async function ucitelLekceDetail(req, res) {
   const correctAnswers = Number(sum[0]?.correctAnswers || 0);
   const successRate = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0;
 
-  // Rozpad podle obtížnosti
+ 
   const [byDiff] = await db.query(
     `SELECT 
         q.difficulty AS difficulty,
@@ -118,7 +114,7 @@ export async function ucitelLekceDetail(req, res) {
     successRate: r.total > 0 ? Math.round((r.correct / r.total) * 100) : 0,
   }));
 
-  // Leaderboard studentů (top 20 podle úspěšnosti + min 3 odpovědi)
+  // Leaderboard studentů 
   const [leader] = await db.query(
     `SELECT
         u.id AS studentId,
@@ -136,7 +132,7 @@ export async function ucitelLekceDetail(req, res) {
     [lessonId]
   );
 
-  // Posledních 30 odpovědí v lekci (audit/monitoring)
+ 
   const [recent] = await db.query(
     `SELECT
         a.id,
@@ -175,16 +171,10 @@ export async function ucitelLekceDetail(req, res) {
     recentAnswers: recent,
   });
 }
-
-/**
- * GET /api/statistiky/ucitel/student/:studentId
- * Detail studenta pro učitele — jen v rozsahu učitelových lekcí
- */
 export async function ucitelStudentDetail(req, res) {
   const teacherId = req.user.id;
   const { studentId } = req.params;
 
-  // Souhrn odpovědí studenta pouze v lekcích učitele
   const [sum] = await db.query(
     `SELECT
         COUNT(a.id) AS totalAnswers,
@@ -199,7 +189,6 @@ export async function ucitelStudentDetail(req, res) {
   const correctAnswers = Number(sum[0]?.correctAnswers || 0);
   const successRate = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0;
 
-  // Po lekcích učitele
   const [byLesson] = await db.query(
     `SELECT
         l.id AS lessonId,
@@ -215,7 +204,6 @@ export async function ucitelStudentDetail(req, res) {
     [studentId, teacherId]
   );
 
-  // Posledních 50 odpovědí studenta v lekcích učitele
   const [recent] = await db.query(
     `SELECT
         a.id,
